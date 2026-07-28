@@ -134,6 +134,7 @@
     padding:7px 0; border-radius:8px; font-size:12px; cursor:pointer;
   }
   #intervalTabs button{ font-size:11px; padding:7px 2px; }
+  #rangeTabs button{ font-size:11px; padding:7px 1px; }
   .range-tabs button.active{ background:var(--amber); color:#1c1305; border-color:var(--amber); font-weight:700; }
 </style>
 </head>
@@ -199,6 +200,8 @@
     <div class="card">
       <h2>価格チャート</h2>
       <div class="range-tabs" id="rangeTabs">
+        <button data-days="7">週</button>
+        <button data-days="30">1ヶ月</button>
         <button data-days="60">3ヶ月</button>
         <button data-days="180" class="active">6ヶ月</button>
         <button data-days="365">1年</button>
@@ -218,7 +221,7 @@
     </div>
 
     <div class="card">
-      <h2>本日ここまでの値動き × 類似時間帯パターン予測</h2>
+      <h2>予測図</h2>
       <div class="range-tabs" id="intervalTabs">
         <button data-interval="1m" data-range="7d">1分</button>
         <button data-interval="5m" data-range="60d" class="active">5分</button>
@@ -595,6 +598,7 @@
           plugins: { legend: { display: false } },
           scales: {
             y: {
+              title: { display: true, text: "始値からの変化率(%)", color: "#7f948d", font: { size: 10 } },
               ticks: { color: "#7f948d", callback: v => v + "%" },
               grid: { color: "#263230" }
             },
