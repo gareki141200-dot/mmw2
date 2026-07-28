@@ -133,6 +133,7 @@
     flex:1; background:var(--panel-2); border:1px solid var(--line); color:var(--ink-dim);
     padding:7px 0; border-radius:8px; font-size:12px; cursor:pointer;
   }
+  #intervalTabs button{ font-size:11px; padding:7px 2px; }
   .range-tabs button.active{ background:var(--amber); color:#1c1305; border-color:var(--amber); font-weight:700; }
 </style>
 </head>
@@ -219,8 +220,11 @@
     <div class="card">
       <h2>本日ここまでの値動き × 類似時間帯パターン予測</h2>
       <div class="range-tabs" id="intervalTabs">
-        <button data-interval="1m" data-range="7d">1分足</button>
-        <button data-interval="5m" data-range="60d" class="active">5分足</button>
+        <button data-interval="1m" data-range="7d">1分</button>
+        <button data-interval="5m" data-range="60d" class="active">5分</button>
+        <button data-interval="15m" data-range="60d">15分</button>
+        <button data-interval="30m" data-range="60d">30分</button>
+        <button data-interval="60m" data-range="2y">60分</button>
       </div>
       <div class="status" id="intradayStatus">
         <div class="spinner"></div>
@@ -230,8 +234,8 @@
       <div id="intradayResults" style="display:none;">
         <canvas id="intradayChart" height="200"></canvas>
         <div class="chart-legend">
-          <span><span class="dot close"></span>本日ここまで</span>
-          <span><span class="dot sma"></span>類似日(全日)</span>
+          <span><span class="dot close"></span>本日実績</span>
+          <span><span class="dot" style="background:none;border-top:2px dashed #e0a530;width:12px;height:0;"></span>予想(類似パターンより)</span>
         </div>
         <div class="match-result" id="intradayMatchResult" style="margin-top:14px;">–</div>
       </div>
@@ -485,6 +489,24 @@
     const base = closes[0];
     return closes.map(v => (v - base) / base * 100);
   }
+  function fmtClockTime(ms, tz){
+    return new Date(ms).toLocaleTimeString("ja-JP", { timeZone: tz, hour12:false, hour:"2-digit", minute:"2-digit" });
+  }
+  // build clock-time labels: real times for today's own bars, extrapolated (using today's own bar spacing) beyond that
+  function buildTimeLabels(todayDates, maxLen, tz){
+    const labels = [];
+    let step = 5 * 60000; // fallback: 5 minutes
+    if (todayDates.length >= 2) step = todayDates[1] - todayDates[0];
+    for (let i=0; i<maxLen; i++){
+      if (i < todayDates.length){
+        labels.push(fmtClockTime(todayDates[i], tz));
+      } else {
+        const ms = todayDates[todayDates.length-1] + (i - todayDates.length + 1) * step;
+        labels.push(fmtClockTime(ms, tz));
+      }
+    }
+    return labels;
+  }
 
   async function runIntradayAnalysis(symbol){
     lastSymbolForIntraday = symbol;
@@ -523,14 +545,29 @@
         }
       }
 
-      // --- chart: today so far vs matched day's full session (both as cum % from open) ---
+      // --- chart: today's actual line continuing into a forecast projected from the matched day's shape ---
       const todayCum = cumPct(today.closes);
       const ctx = document.getElementById("intradayChart");
       if (intradayChart) intradayChart.destroy();
 
-      const matchedCum = bestDay ? cumPct(bestDay.closes) : [];
-      const maxLen = Math.max(todayCum.length, matchedCum.length);
-      const labels = Array.from({length: maxLen}, (_, i) => `${i}`);
+      const elapsedIdx = today.closes.length - 1; // last actual index, also the "now" point in bestDay's own index space
+      let combined = todayCum.slice(); // start as actual-only
+      let forecastStartIdx = null; // first index that is a forecast point (dashed)
+
+      if (bestDay && bestDay.closes.length - 1 > elapsedIdx){
+        forecastStartIdx = elapsedIdx + 1;
+        // apply the matched day's own minute-to-minute % moves onto today's actual trajectory,
+        // continuing seamlessly from today's last real price
+        let forecastPrice = today.closes[elapsedIdx];
+        const todayOpen = today.closes[0];
+        for (let j = elapsedIdx + 1; j < bestDay.closes.length; j++){
+          const ret = (bestDay.closes[j] - bestDay.closes[j-1]) / bestDay.closes[j-1];
+          forecastPrice = forecastPrice * (1 + ret);
+          combined.push((forecastPrice - todayOpen) / todayOpen * 100);
+        }
+      }
+
+      const labels = buildTimeLabels(today.dates, combined.length, tz);
 
       intradayChart = new Chart(ctx, {
         type: "line",
@@ -538,23 +575,17 @@
           labels,
           datasets: [
             {
-              label: "本日ここまで",
-              data: todayCum,
+              label: "本日実績→予想",
+              data: combined,
               borderColor: "#e0a530",
               backgroundColor: "rgba(224,165,48,0.08)",
               pointRadius: 0,
               tension: 0.1,
               fill: true,
-              borderWidth: 2
-            },
-            {
-              label: "類似日(全日)",
-              data: matchedCum,
-              borderColor: "#3ec98a",
-              pointRadius: 0,
-              tension: 0.1,
-              borderDash: [4,3],
-              borderWidth: 1.5
+              borderWidth: 2,
+              segment: {
+                borderDash: (segCtx) => (forecastStartIdx !== null && segCtx.p0DataIndex >= forecastStartIdx - 1) ? [5,4] : undefined
+              }
             }
           ]
         },
@@ -568,8 +599,8 @@
               grid: { color: "#263230" }
             },
             x: {
-              title: { display: true, text: `経過(${interval})`, color: "#7f948d", font: { size: 10 } },
-              ticks: { color: "#7f948d", maxTicksLimit: 6 },
+              title: { display: true, text: "時刻", color: "#7f948d", font: { size: 10 } },
+              ticks: { color: "#7f948d", maxTicksLimit: 7 },
               grid: { display: false }
             }
           }
@@ -578,16 +609,15 @@
 
       // --- text result ---
       if (bestDay && bestCorr > -1){
-        const elapsedIdx = todayReturns.length; // index into bestDay.closes at today's "now" point
         let remainMsg;
-        if (bestDay.closes.length - 1 > elapsedIdx){
-          const from = bestDay.closes[elapsedIdx];
-          const to = bestDay.closes[bestDay.closes.length - 1];
-          const remainReturn = (to - from) / from * 100;
+        if (forecastStartIdx !== null){
+          const to = combined[combined.length - 1];
+          const from = combined[elapsedIdx];
+          const remainReturn = to - from;
           const dirLabel = remainReturn > 0 ? "▲ 上昇" : "▼ 下落";
-          remainMsg = `<div class="line">- <b>その日の残り時間の値動き(参考):</b> ${dirLabel} (${fmtSigned(remainReturn)}%)</div>`;
+          remainMsg = `<div class="line">- <b>予想される残り時間の値動き:</b> ${dirLabel} (${fmtSigned(remainReturn)}%、あくまで参考値です)</div>`;
         } else {
-          remainMsg = `<div class="line">類似日はこの時点がほぼ大引けでした(残り時間データなし)。</div>`;
+          remainMsg = `<div class="line">類似日はこの時点がほぼ大引けでした(予想の元になる残り時間データなし)。</div>`;
         }
         const reliability = bestCorr >= 0.7 ? "" : "(比較対象日数が少ないため、参考程度にご覧ください)";
         intradayMatchResult.innerHTML = `
@@ -596,7 +626,7 @@
           ${remainMsg}
         `;
       } else {
-        intradayMatchResult.innerHTML = `<div class="line">条件を満たす類似パターンが見つかりませんでした。</div>`;
+        intradayMatchResult.innerHTML = `<div class="line">条件を満たす類似パターンが見つかりませんでした。予想は表示できません。</div>`;
       }
 
       intradayResultsBox.style.display = "block";
