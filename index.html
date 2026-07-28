@@ -238,7 +238,7 @@
         <canvas id="intradayChart" height="200"></canvas>
         <div class="chart-legend">
           <span><span class="dot close"></span>本日実績</span>
-          <span><span class="dot" style="background:none;border-top:2px dashed #e0a530;width:12px;height:0;"></span>予想(類似パターンより)</span>
+          <span><span class="dot" style="background:none;border-top:2px dashed #3ec98a;width:12px;height:0;"></span>予想(類似パターンより)</span>
         </div>
         <div class="match-result" id="intradayMatchResult" style="margin-top:14px;">–</div>
       </div>
@@ -587,7 +587,9 @@
               fill: true,
               borderWidth: 2,
               segment: {
-                borderDash: (segCtx) => (forecastStartIdx !== null && segCtx.p0DataIndex >= forecastStartIdx - 1) ? [5,4] : undefined
+                borderColor: (segCtx) => (forecastStartIdx !== null && segCtx.p0DataIndex >= forecastStartIdx - 1) ? "#3ec98a" : undefined,
+                borderDash: (segCtx) => (forecastStartIdx !== null && segCtx.p0DataIndex >= forecastStartIdx - 1) ? [5,4] : undefined,
+                backgroundColor: (segCtx) => (forecastStartIdx !== null && segCtx.p0DataIndex >= forecastStartIdx - 1) ? "rgba(62,201,138,0.08)" : undefined
               }
             }
           ]
