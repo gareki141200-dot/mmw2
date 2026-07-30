@@ -224,10 +224,10 @@
       <h2>予測図</h2>
       <div class="range-tabs" id="intervalTabs">
         <button data-interval="1m" data-range="7d">1分</button>
-        <button data-interval="5m" data-range="60d" class="active">5分</button>
-        <button data-interval="15m" data-range="60d">15分</button>
-        <button data-interval="30m" data-range="60d">30分</button>
-        <button data-interval="60m" data-range="2y">60分</button>
+        <button data-interval="5m" data-range="30d" class="active">5分</button>
+        <button data-interval="15m" data-range="30d">15分</button>
+        <button data-interval="30m" data-range="30d">30分</button>
+        <button data-interval="60m" data-range="1y">60分</button>
       </div>
       <div class="status" id="intradayStatus">
         <div class="spinner"></div>
@@ -246,8 +246,8 @@
   </div>
 
   <div class="note">
-    データはYahoo! Financeの公開チャートAPIを、CORS回避用の複数の公開プロキシ(allorigins.win / codetabs.com / killcors.com / cors.lol)を順番に試す形で取得しています。1つが混雑・停止していても他の経路で自動的に再試行するため、以前より安定して取得できるはずです。それでも全滅した場合は、少し時間をおいて再度お試しください。<br><br>
-    「本日ここまでの値動き」欄は、無料APIの制約により1分足は直近5〜7営業日分、5分足は直近60日分の範囲でのみ過去の同時間帯パターンと比較しています。比較対象の日数が少ないため、日足の照合結果に比べて参考程度としてご利用ください。
+    データはYahoo! Financeの公開チャートAPIを、CORS回避用の複数の公開プロキシ(codetabs.com / killcors.com / cors.lol / corsfix.com / cors.sh / allorigins.win)を順番に、全滅した場合は少し待ってもう一周試す形で取得しています。それでも失敗する場合はエラー内に「再試行」ボタンが出るので、時間をおいて押してみてください。<br><br>
+    「本日ここまでの値動き」欄は、無料APIの制約(および通信の安定性)により1分足は直近5〜7営業日分、5〜30分足は直近30日分、60分足は直近1年分の範囲でのみ過去の同時間帯パターンと比較しています。比較対象の日数が少ないため、日足の照合結果に比べて参考程度としてご利用ください。
   </div>
 </div>
 
@@ -284,9 +284,13 @@
     { name: "codetabs", build: (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url), wrapped: false },
     { name: "killcors", build: (url) => "https://proxy.killcors.com/?url=" + encodeURIComponent(url), wrapped: false },
     { name: "cors.lol", build: (url) => "https://api.cors.lol/url=" + url, wrapped: false },
+    { name: "corsfix", build: (url) => "https://proxy.corsfix.com/?" + url, wrapped: false },
+    { name: "cors.sh", build: (url) => "https://proxy.cors.sh/" + url, wrapped: false },
     { name: "allorigins(raw)", build: (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url), wrapped: false },
     { name: "allorigins(get)", build: (url) => "https://api.allorigins.win/get?url=" + encodeURIComponent(url), wrapped: true }
   ];
+
+  function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
   async function fetchWithTimeout(url, ms){
     const controller = new AbortController();
@@ -301,24 +305,29 @@
   async function fetchYahooChart(symbol, range="3y", interval="1d"){
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
     const failures = [];
-    for (const proxy of PROXIES){
-      try{
-        const res = await fetchWithTimeout(proxy.build(yahooUrl), 8000);
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        let json;
-        if (proxy.wrapped){
-          const wrapper = await res.json();
-          json = JSON.parse(wrapper.contents);
-        } else {
-          json = await res.json();
+    // try the full proxy list twice (with a short pause) before giving up,
+    // since most failures here are transient (rate limits / temporary outages)
+    for (let pass = 0; pass < 2; pass++){
+      for (const proxy of PROXIES){
+        try{
+          const res = await fetchWithTimeout(proxy.build(yahooUrl), 16000);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          let json;
+          if (proxy.wrapped){
+            const wrapper = await res.json();
+            json = JSON.parse(wrapper.contents);
+          } else {
+            json = await res.json();
+          }
+          if (json.chart && json.chart.error) throw new Error(json.chart.error.description || "銘柄コードが見つかりません");
+          if (!json.chart || !json.chart.result || !json.chart.result[0]) throw new Error("データが空です");
+          return json.chart.result[0];
+        } catch(e){
+          const reason = (e && e.name === "AbortError") ? "タイムアウト" : (e && e.message ? e.message : String(e));
+          if (pass === 0) failures.push(`${proxy.name}: ${reason}`);
         }
-        if (json.chart && json.chart.error) throw new Error(json.chart.error.description || "銘柄コードが見つかりません");
-        if (!json.chart || !json.chart.result || !json.chart.result[0]) throw new Error("データが空です");
-        return json.chart.result[0];
-      } catch(e){
-        const reason = (e && e.name === "AbortError") ? "タイムアウト" : (e && e.message ? e.message : String(e));
-        failures.push(`${proxy.name}: ${reason}`);
       }
+      if (pass === 0) await sleep(1500); // brief pause before the second full pass
     }
     throw new Error("全ての経路で取得に失敗しました [" + failures.join(" / ") + "]");
   }
@@ -478,7 +487,7 @@
   const intradayResultsBox = document.getElementById("intradayResults");
   const intradayMatchResult = document.getElementById("intradayMatchResult");
 
-  let currentIntervalBtn = { interval: "5m", range: "60d" };
+  let currentIntervalBtn = { interval: "5m", range: "30d" };
   let intradayChart = null;
   let lastSymbolForIntraday = null;
 
@@ -649,8 +658,11 @@
 
       intradayResultsBox.style.display = "block";
     } catch(err){
-      intradayError.textContent = "エラーが発生しました: " + (err && err.message ? err.message : err);
+      intradayError.innerHTML = "エラーが発生しました: " + (err && err.message ? err.message : err) +
+        '<br><button id="intradayRetryBtn" style="margin-top:10px;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;">再試行</button>';
       intradayError.classList.add("show");
+      const retryBtn = document.getElementById("intradayRetryBtn");
+      if (retryBtn) retryBtn.addEventListener("click", () => runIntradayAnalysis(lastSymbolForIntraday));
     } finally {
       intradayStatus.classList.remove("show");
     }
@@ -775,8 +787,11 @@
 
       results.classList.add("show");
     } catch(err){
-      errorBox.textContent = "エラーが発生しました: " + (err && err.message ? err.message : err);
+      errorBox.innerHTML = "エラーが発生しました: " + (err && err.message ? err.message : err) +
+        '<br><button id="mainRetryBtn" style="margin-top:10px;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;">再試行</button>';
       errorBox.classList.add("show");
+      const retryBtn = document.getElementById("mainRetryBtn");
+      if (retryBtn) retryBtn.addEventListener("click", () => runAnalysis());
     } finally {
       statusBox.classList.remove("show");
       runBtn.disabled = false;
