@@ -279,20 +279,31 @@
   setInterval(renderTimeBanner, 30000);
 
   // ---- 2. fetch stock data via CORS proxies (Yahoo Finance has no CORS headers) ----
+  // allorigins.win is known to have frequent outages, so it's kept only as a last-resort fallback.
   const PROXIES = [
-    { build: (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url), wrapped: false },
-    { build: (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url), wrapped: false },
-    { build: (url) => "https://proxy.killcors.com/?url=" + encodeURIComponent(url), wrapped: false },
-    { build: (url) => "https://api.cors.lol/url=" + url, wrapped: false },
-    { build: (url) => "https://api.allorigins.win/get?url=" + encodeURIComponent(url), wrapped: true }
+    { name: "codetabs", build: (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url), wrapped: false },
+    { name: "killcors", build: (url) => "https://proxy.killcors.com/?url=" + encodeURIComponent(url), wrapped: false },
+    { name: "cors.lol", build: (url) => "https://api.cors.lol/url=" + url, wrapped: false },
+    { name: "allorigins(raw)", build: (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url), wrapped: false },
+    { name: "allorigins(get)", build: (url) => "https://api.allorigins.win/get?url=" + encodeURIComponent(url), wrapped: true }
   ];
+
+  async function fetchWithTimeout(url, ms){
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    try{
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function fetchYahooChart(symbol, range="3y", interval="1d"){
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
-    let lastErr;
+    const failures = [];
     for (const proxy of PROXIES){
       try{
-        const res = await fetch(proxy.build(yahooUrl));
+        const res = await fetchWithTimeout(proxy.build(yahooUrl), 8000);
         if (!res.ok) throw new Error("HTTP " + res.status);
         let json;
         if (proxy.wrapped){
@@ -305,10 +316,11 @@
         if (!json.chart || !json.chart.result || !json.chart.result[0]) throw new Error("データが空です");
         return json.chart.result[0];
       } catch(e){
-        lastErr = e;
+        const reason = (e && e.name === "AbortError") ? "タイムアウト" : (e && e.message ? e.message : String(e));
+        failures.push(`${proxy.name}: ${reason}`);
       }
     }
-    throw lastErr || new Error("データ取得に失敗しました(複数の経路を試しましたが取得できませんでした)");
+    throw new Error("全ての経路で取得に失敗しました [" + failures.join(" / ") + "]");
   }
 
   // ---- 3. clean raw Yahoo response into aligned arrays (drop rows with any null) ----
